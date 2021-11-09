@@ -7,3 +7,4 @@ edition = "2021"
 
 [dependencies]
 x11-dl = "2.19.1"
+x11rb = {version = "0.9.0", features = ["glx", "randr", "render"] }

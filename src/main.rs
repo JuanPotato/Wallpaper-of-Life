@@ -3,19 +3,20 @@ extern crate x11rb;
 
 use std::time::Duration;
 use x11rb::connection::Connection;
-use x11rb::protocol::xproto::{
-    ColormapAlloc, ConfigureWindowAux, ConnectionExt as XprotoConnectionExt, EventMask, StackMode,
-};
+use x11rb::protocol::xproto::{ColormapAlloc, ConfigureWindowAux, ConnectionExt as XprotoConnectionExt, EventMask, StackMode, Point, GcontextWrapper, CreateGCAux, Rectangle};
 use x11rb::wrapper::ConnectionExt as WrapperConnectionExt;
 
 use std::ffi::c_void;
 use std::mem::MaybeUninit;
 use std::ptr::{null, null_mut};
 use x11_dl::{glx, xlib, xrender};
+use x11rb::protocol::Event;
+use x11rb::errors::ReplyOrIdError;
 
 fn main() {
     let mut wol = WoL::new();
     wol.init_background();
+    wol.main_loop();
 }
 
 struct WoL {
@@ -179,13 +180,39 @@ impl WoL {
             .check()
             .unwrap();
 
+        let all_events = EventMask::KEY_PRESS |
+            EventMask::KEY_RELEASE |
+            EventMask::BUTTON_PRESS |
+            EventMask::BUTTON_RELEASE |
+            EventMask::ENTER_WINDOW |
+            EventMask::LEAVE_WINDOW |
+            // EventMask::POINTER_MOTION |
+            // EventMask::POINTER_MOTION_HINT |
+            EventMask::BUTTON1_MOTION |
+            EventMask::BUTTON2_MOTION |
+            EventMask::BUTTON3_MOTION |
+            EventMask::BUTTON4_MOTION |
+            EventMask::BUTTON5_MOTION |
+            // EventMask::BUTTON_MOTION |
+            // EventMask::KEYMAP_STATE |
+            EventMask::EXPOSURE |
+            EventMask::VISIBILITY_CHANGE |
+            EventMask::STRUCTURE_NOTIFY |
+            EventMask::RESIZE_REDIRECT |
+            // EventMask::SUBSTRUCTURE_NOTIFY |
+            // EventMask::SUBSTRUCTURE_REDIRECT |
+            // EventMask::FOCUS_CHANGE |
+            // EventMask::PROPERTY_CHANGE |
+            // EventMask::COLOR_MAP_CHANGE |
+            EventMask::OWNER_GRAB_BUTTON;
+
         let swa = x11rb::protocol::xproto::CreateWindowAux::new()
             // .background_pixmap(BackPixmap::NONE)
             .background_pixel(0x00ff00)
             // .border_pixmap(0)
             .border_pixel(0)
             // .backing_store(BackingStore::NOT_USEFUL)
-            .event_mask(EventMask::STRUCTURE_NOTIFY | EventMask::EXPOSURE | EventMask::KEY_PRESS)
+            .event_mask(all_events)
             .do_not_propogate_mask(0)
             .override_redirect(1)
             .colormap(self.colormap);
@@ -222,7 +249,73 @@ impl WoL {
         // Draw and sync
         self.xcb.map_window(self.window).unwrap().check().unwrap();
         self.xcb.sync().unwrap();
-
-        std::thread::sleep(Duration::from_secs(2));
     }
+
+    fn main_loop(&mut self) {
+        let mut buttons = [false; 10];
+        let black_gc = create_gc_with_foreground(&self.xcb, self.window, 0x000000).unwrap();
+        let white_gc = create_gc_with_foreground(&self.xcb, self.window, 0xffffff).unwrap();
+
+        loop {
+            let event = self.xcb.wait_for_event().unwrap();
+
+            match event {
+                // Event::KeyPress(event) => {}
+                Event::MotionNotify(event) => {
+                    if buttons[1] {
+                        self.xcb.poly_fill_rectangle(
+                            self.window, black_gc.gcontext(),
+                            &[Rectangle { x: event.event_x, y: event.event_y, width: 10, height: 10 }],
+                        ).unwrap().check().unwrap();
+                    } else {
+                        self.xcb.poly_fill_rectangle(
+                            self.window, white_gc.gcontext(),
+                            &[Rectangle { x: event.event_x, y: event.event_y, width: 10, height: 10 }],
+                        ).unwrap().check().unwrap();
+                    }
+                    // println!("x: {}, y: {}", event.event_x, event.event_y);
+                }
+                Event::ButtonPress(event) => {
+                    buttons[event.detail as usize] = true;
+                    if event.detail == 1 {
+                        self.xcb.poly_fill_rectangle(
+                            self.window, black_gc.gcontext(),
+                            &[Rectangle { x: event.event_x, y: event.event_y, width: 10, height: 10 }],
+                        ).unwrap().check().unwrap();
+                    } else {
+                        self.xcb.poly_fill_rectangle(
+                            self.window, white_gc.gcontext(),
+                            &[Rectangle { x: event.event_x, y: event.event_y, width: 10, height: 10 }],
+                        ).unwrap().check().unwrap();
+                    }
+                }
+                Event::ButtonRelease(event) => {
+                    buttons[event.detail as usize] = false;
+                    if event.detail == 1 {}
+                }
+                // Event::ButtonPress(event) => { }
+                // Event::ButtonPress(event) => { }
+
+                // Event::Error(_) => println!("Got an unexpected error"),
+                _ => {
+                    // println!("Got an unknown event");
+                    // println!("{:?}", &event);
+                }
+            }
+        }
+    }
+}
+
+fn create_gc_with_foreground<C: Connection>(
+    conn: &C,
+    win_id: x11rb::protocol::xproto::Window,
+    foreground: u32,
+) -> Result<GcontextWrapper<'_, C>, ReplyOrIdError> {
+    GcontextWrapper::create_gc(
+        conn,
+        win_id,
+        &CreateGCAux::new()
+            .graphics_exposures(0)
+            .foreground(foreground),
+    )
 }

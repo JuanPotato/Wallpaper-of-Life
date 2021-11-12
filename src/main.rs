@@ -13,10 +13,16 @@ use x11_dl::{glx, xlib, xrender};
 use x11rb::protocol::Event;
 use x11rb::errors::ReplyOrIdError;
 
+mod game_of_life;
+
 fn main() {
-    let mut wol = WoL::new();
-    wol.init_background();
-    wol.main_loop();
+    // game_of_life::BasicGoL::new(10000, 10000).glide(1000);
+    game_of_life::BasicGoL::new(1000, 1000).glide(1000);
+    game_of_life::BasicGoL::new(100, 100).glide(100);
+
+    // let mut wol = WoL::new();
+    // wol.init_background();
+    // wol.main_loop();
 }
 
 struct WoL {

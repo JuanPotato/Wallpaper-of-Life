@@ -29,9 +29,7 @@ impl BasicGoL {
     }
 
     fn get(&self, row: usize, col: usize) -> u8 {
-        unsafe {
-            *self.prev.get_unchecked(row * self.big_width + col)
-        }
+        unsafe { *self.prev.get_unchecked(row * self.big_width + col) }
     }
 
     fn set(&mut self, row: usize, col: usize, val: u8) {
@@ -41,8 +39,7 @@ impl BasicGoL {
     }
 
     fn sum_neighbors(&self, row: usize, col: usize) -> u8 {
-        0
-            + self.get(row - 1, col)
+        0 + self.get(row - 1, col)
             + self.get(row + 1, col)
             + self.get(row, col - 1)
             + self.get(row, col + 1)
@@ -93,6 +90,10 @@ impl BasicGoL {
         let micro = stop.duration_since(start).as_micros() as f64;
         let milli = micro / 1000.0;
 
-        println!("Total: {:.6} ms ({:.6} ms / iter)", milli, milli / iterations as f64);
+        println!(
+            "Total: {:.6} ms ({:.6} ms / iter)",
+            milli,
+            milli / iterations as f64
+        );
     }
 }

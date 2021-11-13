@@ -9,3 +9,4 @@ edition = "2021"
 x11rb = { version = "0.9.0", features = ["allow-unsafe-code"] }
 x11-dl = "2.19.1"
 glfw = "0.42.0"
+gl = "0.14.0"

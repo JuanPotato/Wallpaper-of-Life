@@ -1,12 +1,14 @@
+extern crate gl;
 extern crate glfw;
 extern crate x11_dl;
 extern crate x11rb;
 
-use glfw::{Action, Context, Key};
+use glfw::{Action, Context, Key, Window, WindowEvent};
+// include the OpenGL type aliases
+use gl::types::*;
 
 use std::ffi::c_void;
-use std::time::Duration;
-
+use std::time::{Duration, Instant};
 use x11rb::protocol::xproto::{
     ChangeWindowAttributesAux, ConfigureWindowAux, ConnectionExt as XprotoConnectionExt, StackMode,
 };
@@ -15,57 +17,99 @@ use x11rb::wrapper::ConnectionExt;
 mod game_of_life;
 
 fn main() {
-    let mut gl = glfw::init(glfw::FAIL_ON_ERRORS.clone()).unwrap();
+    let mut wol = WoL::new();
+    wol.main_loop();
+}
 
-    // Create a windowed mode window and its OpenGL context
-    let (mut window, events) = gl
-        .create_window(1920, 1080, "Wallpaper of Life", glfw::WindowMode::Windowed)
-        .expect("Failed to create GLFW window.");
+struct WoL {
+    glfw: glfw::Glfw,
+    window: Window,
+    events: std::sync::mpsc::Receiver<(f64, WindowEvent)>,
+}
 
-    unsafe {
-        let xlib_xcb = x11_dl::xlib_xcb::Xlib_xcb::open().unwrap();
+impl WoL {
+    fn new() -> WoL {
+        let mut my_glfw = glfw::init(glfw::FAIL_ON_ERRORS.clone()).unwrap();
 
-        let disp = gl.get_x11_display() as *mut x11_dl::xlib::Display;
-        let win = window.get_x11_window();
+        // Create a windowed mode window and its OpenGL context
+        let (mut window, events) = my_glfw
+            .create_window(1920, 1080, "Wallpaper of Life", glfw::WindowMode::Windowed)
+            .expect("Failed to create GLFW window.");
 
-        /* Get the XCB connection from the display */
-        let xcb_conn = (xlib_xcb.XGetXCBConnection)(disp);
-        if xcb_conn.is_null() {
-            panic!("Can't get xcb connection from display");
+        unsafe {
+            let xlib_xcb = x11_dl::xlib_xcb::Xlib_xcb::open().unwrap();
+
+            let disp = my_glfw.get_x11_display() as *mut x11_dl::xlib::Display;
+            let win = window.get_x11_window();
+
+            /* Get the XCB connection from the display */
+            let xcb_conn = (xlib_xcb.XGetXCBConnection)(disp);
+            if xcb_conn.is_null() {
+                panic!("Can't get xcb connection from display");
+            }
+
+            make_window_wallpaper(xcb_conn, win as u32);
         }
 
-        make_window_wallpaper(xcb_conn, win as u32);
+        // Make the window's context current
+        window.make_current();
+
+        window.set_mouse_button_polling(true);
+        window.set_cursor_pos_polling(true);
+        window.set_cursor_enter_polling(true);
+
+        gl::load_with(|s| my_glfw.get_proc_address_raw(s));
+        unsafe {
+            gl::ClearColor(1.0, 1.0, 1.0, 1.0);
+        }
+
+        Self {
+            glfw: my_glfw,
+            window,
+            events,
+        }
     }
 
-    // Make the window's context current
-    window.make_current();
-    window.set_mouse_button_polling(true);
-    window.set_cursor_pos_polling(true);
-    window.set_cursor_enter_polling(true);
+    fn main_loop(&mut self) {
+        // Loop until the user closes the window
+        let mut last_draw = Instant::now() - Duration::from_secs(1);
+        let max_frame_time = Duration::from_secs_f32(1.0 / 60.0);
 
-    let mut n = 0;
-    // Loop until the user closes the window
-    while !window.should_close() {
-        // Swap front and back buffers
-        window.swap_buffers();
+        while !self.window.should_close() {
+            let now = Instant::now();
+            let delta = now.duration_since(last_draw);
 
-        // Poll for and process events
-        gl.poll_events();
-        for (_, event) in glfw::flush_messages(&events) {
-            dbg!(&event);
-            n += 1;
-            // Safety net for the bug that causes the giant window to not move to the background
-            if n > 100 {
-                window.set_should_close(true);
-            }
-            // println!("{:?}", event);
-            match event {
-                glfw::WindowEvent::Key(Key::Escape, _, Action::Press, _) => {
-                    window.set_should_close(true);
+            let mut should_redraw = false;
+
+            // Poll for and process events
+            self.glfw.poll_events();
+
+            for (_, event) in glfw::flush_messages(&self.events) {
+                dbg!(&event);
+                match event {
+                    glfw::WindowEvent::Key(Key::Escape, _, Action::Press, _) => {
+                        self.window.set_should_close(true);
+                        should_redraw = false;
+                    }
+                    glfw::WindowEvent::Refresh => {
+                        should_redraw = true;
+                    }
+                    _ => {}
                 }
-                _ => {}
+            }
+
+            if should_redraw || delta >= max_frame_time {
+                self.draw();
             }
         }
+    }
+
+    fn draw(&mut self) {
+        unsafe {
+            gl::Clear(gl::COLOR_BUFFER_BIT);
+        }
+
+        self.window.swap_buffers();
     }
 }
 

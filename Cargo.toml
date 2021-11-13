@@ -6,5 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-x11rb = {version = "0.9.0", features = ["allow-unsafe-code", "randr", "render"] }
+x11rb = { version = "0.9.0", features = ["allow-unsafe-code"] }
 x11-dl = "2.19.1"
+glfw = "0.42.0"

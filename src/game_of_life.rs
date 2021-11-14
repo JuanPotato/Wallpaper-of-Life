@@ -28,62 +28,79 @@ impl BasicGoL {
         }
     }
 
-    fn get(&self, row: usize, col: usize) -> u8 {
+    pub fn iter(&self) -> impl Iterator<Item = impl Iterator<Item = u8> + '_> + '_ {
+        (1..(self.height + 1)).map(move |r| {
+            let start = r * self.big_width + 1;
+            self.prev[start..start + self.width].iter().copied()
+        })
+    }
+
+    fn get_internal(&self, row: usize, col: usize) -> u8 {
         unsafe { *self.prev.get_unchecked(row * self.big_width + col) }
     }
 
-    fn set(&mut self, row: usize, col: usize, val: u8) {
+    fn set_internal(&mut self, row: usize, col: usize, val: u8) {
         unsafe {
             *self.next.get_unchecked_mut(row * self.big_width + col) = val;
         }
     }
 
     fn sum_neighbors(&self, row: usize, col: usize) -> u8 {
-        0 + self.get(row - 1, col)
-            + self.get(row + 1, col)
-            + self.get(row, col - 1)
-            + self.get(row, col + 1)
-            + self.get(row - 1, col - 1)
-            + self.get(row - 1, col + 1)
-            + self.get(row + 1, col - 1)
-            + self.get(row + 1, col + 1)
+        0 + self.get_internal(row - 1, col)
+            + self.get_internal(row + 1, col)
+            + self.get_internal(row, col - 1)
+            + self.get_internal(row, col + 1)
+            + self.get_internal(row - 1, col - 1)
+            + self.get_internal(row - 1, col + 1)
+            + self.get_internal(row + 1, col - 1)
+            + self.get_internal(row + 1, col + 1)
     }
 
-    fn fill_with_gliders(&mut self) {
+    fn swap_buffers(&mut self) {
+        std::mem::swap(&mut self.prev, &mut self.next);
+    }
+
+    pub fn fill_with_gliders(&mut self) {
         for r in (1..(self.height + 1)).step_by(5) {
             for c in (1..(self.width + 1)).step_by(5) {
-                self.set(r + 0, c + 1, 1);
+                self.set_internal(r + 0, c + 1, 1);
 
-                self.set(r + 1, c + 2, 1);
+                self.set_internal(r + 1, c + 2, 1);
 
-                self.set(r + 2, c + 0, 1);
-                self.set(r + 2, c + 1, 1);
-                self.set(r + 2, c + 2, 1);
+                self.set_internal(r + 2, c + 0, 1);
+                self.set_internal(r + 2, c + 1, 1);
+                self.set_internal(r + 2, c + 2, 1);
             }
         }
+
+        self.swap_buffers();
     }
 
-    pub fn glide(&mut self, iterations: usize) {
+    pub fn tick(&mut self) {
+        for r in 1..(self.height + 1) {
+            for c in 1..(self.width + 1) {
+                let sum = self.sum_neighbors(r, c);
+
+                let val = if self.get_internal(r, c) == 1 {
+                    sum == 2 || sum == 3
+                } else {
+                    sum == 3
+                };
+
+                self.set_internal(r, c, val as u8);
+            }
+        }
+
+        self.swap_buffers();
+    }
+
+    pub fn bench(&mut self, iterations: usize) {
         self.fill_with_gliders();
-        std::mem::swap(&mut self.prev, &mut self.next);
 
         let start = Instant::now();
+
         for _ in 0..iterations {
-            for r in 1..(self.height + 1) {
-                for c in 1..(self.width + 1) {
-                    let sum = self.sum_neighbors(r, c);
-
-                    let val = if self.get(r, c) == 1 {
-                        sum == 2 || sum == 3
-                    } else {
-                        sum == 3
-                    };
-
-                    self.set(r, c, val as u8);
-                }
-            }
-
-            std::mem::swap(&mut self.prev, &mut self.next);
+            self.tick();
         }
 
         let stop = Instant::now();
@@ -95,5 +112,21 @@ impl BasicGoL {
             milli,
             milli / iterations as f64
         );
+    }
+
+    pub fn print(&self, dead: &str, alive: &str) {
+        let mut output = String::with_capacity((dead.len() * self.width + 1) * self.height);
+        for row in self.iter() {
+            for cell in row {
+                if cell == 0 {
+                    output.push_str(dead);
+                } else {
+                    output.push_str(alive);
+                }
+            }
+            output.push('\n');
+        }
+
+        print!("{}", output);
     }
 }

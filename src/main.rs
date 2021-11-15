@@ -3,7 +3,10 @@ extern crate glfw;
 extern crate x11_dl;
 extern crate x11rb;
 
-use glfw::{Action, Context, Key, OpenGlProfileHint, Window, WindowEvent, WindowHint};
+use glfw::{
+    Action, Context, Key, Modifiers, MouseButton, OpenGlProfileHint, Window, WindowEvent,
+    WindowHint,
+};
 // include the OpenGL type aliases
 use gl::types::*;
 
@@ -14,9 +17,6 @@ use x11rb::protocol::xproto::{
 };
 use x11rb::wrapper::ConnectionExt;
 
-mod game_of_life;
-
-use game_of_life::BasicGoL;
 use std::ptr::null;
 
 fn main() {
@@ -27,7 +27,7 @@ fn main() {
     // gol.tick();
     // gol.print("  ", "██");
 
-    let mut wol = WoL::new(16);
+    let mut wol = WoL::new(4, 1.0 / 30.0);
     wol.main_loop();
 }
 
@@ -36,6 +36,7 @@ struct WoL {
     width: u32,
     height: u32,
     scale: u32,
+    delay: f64,
     window: Window,
     events: std::sync::mpsc::Receiver<(f64, WindowEvent)>,
 
@@ -56,10 +57,10 @@ struct WoL {
 }
 
 impl WoL {
-    fn new(scale: u32) -> WoL {
+    fn new(scale: u32, delay: f64) -> WoL {
         let mut my_glfw = glfw::init(glfw::FAIL_ON_ERRORS.clone()).unwrap();
 
-        let (width, height) = my_glfw.with_primary_monitor(|g, mon| {
+        let (width, height) = my_glfw.with_primary_monitor(|_g, mon| {
             let vid = mon.unwrap().get_video_mode().unwrap();
             (vid.width, vid.height)
         });
@@ -121,11 +122,11 @@ impl WoL {
         let copy_uni_scale = get_uniform_location(copy_shader, "scale");
 
         #[rustfmt::skip]
-        let vertices: [GLfloat; 8] = [
+            let vertices: [GLfloat; 8] = [
             -1.0, -1.0,
-             1.0, -1.0,
-            -1.0,  1.0,
-             1.0,  1.0
+            1.0, -1.0,
+            -1.0, 1.0,
+            1.0, 1.0
         ];
 
         let mut vertex_array: GLuint = 0;
@@ -161,7 +162,8 @@ impl WoL {
         let tex_height = (height / scale) as i32;
 
         let front_tex = gl::TEXTURE0;
-        let front_tex_id = make_texture2d(front_tex, tex_width, tex_height, gl::REPEAT, gl::NEAREST);
+        let front_tex_id =
+            make_texture2d(front_tex, tex_width, tex_height, gl::REPEAT, gl::NEAREST);
         let back_tex = gl::TEXTURE1;
         let back_tex_id = make_texture2d(back_tex, tex_width, tex_height, gl::REPEAT, gl::NEAREST);
 
@@ -176,11 +178,7 @@ impl WoL {
 
             gl::UseProgram(copy_shader);
             gl::Uniform1i(copy_uni_state, (front_tex - gl::TEXTURE0) as i32);
-            gl::Uniform2f(
-                copy_uni_scale,
-                (width) as GLfloat,
-                (height) as GLfloat,
-            );
+            gl::Uniform2f(copy_uni_scale, (width) as GLfloat, (height) as GLfloat);
         }
 
         let mut gol_frame_buffer = 0;
@@ -205,6 +203,7 @@ impl WoL {
             width,
             height,
             scale,
+            delay,
             window,
             events,
 
@@ -228,10 +227,8 @@ impl WoL {
     fn main_loop(&mut self) {
         // Loop until the user closes the window
         let mut last_tick = Instant::now() - Duration::from_secs(1);
-        let delay = 0.10;
 
-        let max_frame_time = Duration::from_secs_f64(delay);
-        let min_frame_time = Duration::from_secs_f64(1.0 / 60.0);
+        let max_delay_time = Duration::from_secs_f64(self.delay);
 
         let mut mouse_pos = (0, 0);
 
@@ -239,10 +236,10 @@ impl WoL {
             let now = Instant::now();
             let delta = now.duration_since(last_tick);
 
-            let time_to_next_tick = if delta.as_secs_f64() > delay {
+            let time_to_next_tick = if delta.as_secs_f64() > self.delay {
                 0.0
             } else {
-                delay - delta.as_secs_f64()
+                self.delay - delta.as_secs_f64()
             };
 
             let mut should_redraw = false;
@@ -259,29 +256,127 @@ impl WoL {
                         should_redraw = true;
                     }
                     glfw::WindowEvent::MouseButton(but, act, mods) => {
+                        if act != glfw::Action::Press {
+                            continue;
+                        }
+
+                        let x = mouse_pos.0 / self.scale;
+                        let y = (self.height - mouse_pos.1) / self.scale;
+
+                        let ctrl = mods.contains(Modifiers::Control);
+                        let shift = mods.contains(Modifiers::Shift);
+
                         unsafe {
                             gl::ActiveTexture(self.front_tex); // GL_TEXTURE0-31
-
-                            let pixels = [
-                                0x00000000, 0xffffffff, 0x00000000,
-                                0xffffffff, 0x00000000, 0x00000000,
-                                0xffffffff, 0xffffffff, 0xffffffffu32,
-                            ];
-                            let x = (mouse_pos.0 / self.scale) as i32;
-                            let y = ((self.height - mouse_pos.1) / self.scale) as i32;
-                            dbg!((x, y));
-
-                            gl::TexSubImage2D(
-                                gl::TEXTURE_2D,
-                                0,
-                                x, y, 3, 3,
-                                gl::RGBA,
-                                gl::UNSIGNED_BYTE,
-                                pixels.as_ptr() as _,
-                            );
-
-                            should_redraw = true;
                         }
+
+                        match (ctrl, shift, but) {
+                            // Left Click
+                            (false, _, MouseButton::Button1) => {
+                                draw_on_texture(x, y, &[0x00000000], 1, 1);
+                            }
+
+                            // Control + Left Click
+                            (true, false, MouseButton::Button1) => {
+                                let total_pixels =
+                                    self.width / self.scale * self.height / self.scale;
+                                let pixels = (0..total_pixels)
+                                    .map(|_| {
+                                        if rand::random::<f32>() > 0.7 {
+                                            0xFFFFFFFF
+                                        } else {
+                                            0x00000000
+                                        }
+                                    })
+                                    .collect::<Vec<u32>>();
+
+                                draw_on_texture(
+                                    0,
+                                    0,
+                                    &pixels,
+                                    self.width / self.scale,
+                                    self.height / self.scale,
+                                );
+                            }
+
+                            // Control + Shift + Left Click
+                            (true, true, MouseButton::Button1) => {
+                                let total_pixels =
+                                    self.width / self.scale * self.height / self.scale;
+                                let pixels = vec![0; total_pixels as usize];
+                                draw_on_texture(
+                                    0,
+                                    0,
+                                    &pixels,
+                                    self.width / self.scale,
+                                    self.height / self.scale,
+                                );
+                            }
+
+                            // Right Click
+                            (_, _, MouseButton::Button2) => {
+                                draw_on_texture(x, y, &[0xffffffff], 1, 1);
+                            }
+
+                            // Middle Click
+                            (false, false, MouseButton::Button3) => {
+                                draw_on_texture(
+                                    x,
+                                    y,
+                                    &[
+                                        0x00000000, 0xffffffff, 0x00000000, 0xffffffff, 0x00000000,
+                                        0x00000000, 0xffffffff, 0xffffffff, 0xffffffff,
+                                    ],
+                                    3,
+                                    3,
+                                );
+                            }
+
+                            // Control + Middle Click
+                            (true, false, MouseButton::Button3) => {
+                                draw_on_texture(
+                                    x,
+                                    y,
+                                    &[
+                                        0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0x00000000,
+                                        0x00000000, 0x00000000, 0xffffffff, 0x00000000,
+                                    ],
+                                    3,
+                                    3,
+                                );
+                            }
+
+                            // Shift + Middle Click
+                            (false, true, MouseButton::Button3) => {
+                                draw_on_texture(
+                                    x,
+                                    y,
+                                    &[
+                                        0x00000000, 0xffffffff, 0x00000000, 0x00000000, 0x00000000,
+                                        0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff,
+                                    ],
+                                    3,
+                                    3,
+                                );
+                            }
+
+                            // Control + Shift + Middle Click
+                            (true, true, MouseButton::Button3) => {
+                                draw_on_texture(
+                                    x,
+                                    y,
+                                    &[
+                                        0xffffffff, 0xffffffff, 0xffffffff, 0x00000000, 0x00000000,
+                                        0xffffffff, 0x00000000, 0xffffffff, 0x00000000,
+                                    ],
+                                    3,
+                                    3,
+                                );
+                            }
+                            _ => {}
+                        }
+
+                        should_redraw = true;
                     }
                     glfw::WindowEvent::CursorPos(x, y) => {
                         mouse_pos = (x as u32, y as u32);
@@ -292,7 +387,7 @@ impl WoL {
 
             let now = Instant::now();
             let delta = now.duration_since(last_tick);
-            let tick = delta >= max_frame_time;
+            let tick = delta >= max_delay_time;
 
             if should_redraw || tick {
                 if tick {
@@ -352,6 +447,22 @@ impl WoL {
         }
 
         self.window.swap_buffers();
+    }
+}
+
+fn draw_on_texture(x: u32, y: u32, pixels: &[u32], w: u32, h: u32) {
+    unsafe {
+        gl::TexSubImage2D(
+            gl::TEXTURE_2D,
+            0,
+            x as GLint,
+            y as GLint,
+            w as GLint,
+            h as GLint,
+            gl::RGBA,
+            gl::UNSIGNED_BYTE,
+            pixels.as_ptr() as _,
+        );
     }
 }
 

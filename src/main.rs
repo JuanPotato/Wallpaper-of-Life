@@ -27,7 +27,7 @@ fn main() {
     // gol.tick();
     // gol.print("  ", "██");
 
-    let mut wol = WoL::new();
+    let mut wol = WoL::new(16);
     wol.main_loop();
 }
 
@@ -56,15 +56,13 @@ struct WoL {
 }
 
 impl WoL {
-    fn new() -> WoL {
+    fn new(scale: u32) -> WoL {
         let mut my_glfw = glfw::init(glfw::FAIL_ON_ERRORS.clone()).unwrap();
 
         let (width, height) = my_glfw.with_primary_monitor(|g, mon| {
             let vid = mon.unwrap().get_video_mode().unwrap();
             (vid.width, vid.height)
         });
-
-        let scale = 8;
 
         my_glfw.window_hint(WindowHint::ContextVersionMajor(3));
         my_glfw.window_hint(WindowHint::ContextVersionMinor(3));
@@ -159,24 +157,29 @@ impl WoL {
         }
 
         // Create texture to hold color buffer
+        let tex_width = (width / scale) as i32;
+        let tex_height = (height / scale) as i32;
+
         let front_tex = gl::TEXTURE0;
-        let front_tex_id =
-            make_texture2d(front_tex, width as _, height as _, gl::REPEAT, gl::NEAREST);
+        let front_tex_id = make_texture2d(front_tex, tex_width, tex_height, gl::REPEAT, gl::NEAREST);
         let back_tex = gl::TEXTURE1;
-        let back_tex_id =
-            make_texture2d(back_tex, width as _, height as _, gl::REPEAT, gl::NEAREST);
+        let back_tex_id = make_texture2d(back_tex, tex_width, tex_height, gl::REPEAT, gl::NEAREST);
 
         unsafe {
             gl::UseProgram(gol_shader);
             gl::Uniform1i(gol_uni_state, (back_tex - gl::TEXTURE0) as i32);
-            gl::Uniform2f(gol_uni_scale, width as GLfloat, height as GLfloat);
+            gl::Uniform2f(
+                gol_uni_scale,
+                (width / scale) as GLfloat,
+                (height / scale) as GLfloat,
+            );
 
             gl::UseProgram(copy_shader);
             gl::Uniform1i(copy_uni_state, (front_tex - gl::TEXTURE0) as i32);
             gl::Uniform2f(
                 copy_uni_scale,
-                (width * scale) as GLfloat,
-                (height * scale) as GLfloat,
+                (width) as GLfloat,
+                (height) as GLfloat,
             );
         }
 
@@ -225,7 +228,7 @@ impl WoL {
     fn main_loop(&mut self) {
         // Loop until the user closes the window
         let mut last_tick = Instant::now() - Duration::from_secs(1);
-        let delay = 0.25;
+        let delay = 0.10;
 
         let max_frame_time = Duration::from_secs_f64(delay);
         let min_frame_time = Duration::from_secs_f64(1.0 / 60.0);
@@ -247,7 +250,6 @@ impl WoL {
             // Poll for and process events
             self.glfw.wait_events_timeout(time_to_next_tick);
             for (_, event) in glfw::flush_messages(&self.events) {
-                // dbg!(&event);
                 match event {
                     glfw::WindowEvent::Key(Key::Escape, _, Action::Press, _) => {
                         self.window.set_should_close(true);
@@ -260,33 +262,24 @@ impl WoL {
                         unsafe {
                             gl::ActiveTexture(self.front_tex); // GL_TEXTURE0-31
 
-                            dbg!(gl::GetError());
                             let pixels = [
-                                0x00000000,
-                                0xffffffff,
-                                0x00000000,
-                                0xffffffff,
-                                0x00000000,
-                                0x00000000,
-                                0xffffffff,
-                                0xffffffff,
-                                0xffffffffu32,
+                                0x00000000, 0xffffffff, 0x00000000,
+                                0xffffffff, 0x00000000, 0x00000000,
+                                0xffffffff, 0xffffffff, 0xffffffffu32,
                             ];
-                            let x = mouse_pos.0 / 1;
-                            let y = mouse_pos.1 / 1;
+                            let x = (mouse_pos.0 / self.scale) as i32;
+                            let y = ((self.height - mouse_pos.1) / self.scale) as i32;
                             dbg!((x, y));
+
                             gl::TexSubImage2D(
                                 gl::TEXTURE_2D,
                                 0,
-                                x as i32,
-                                (self.height - y) as i32,
-                                3,
-                                3,
+                                x, y, 3, 3,
                                 gl::RGBA,
                                 gl::UNSIGNED_BYTE,
                                 pixels.as_ptr() as _,
                             );
-                            dbg!(gl::GetError());
+
                             should_redraw = true;
                         }
                     }
@@ -302,7 +295,6 @@ impl WoL {
             let tick = delta >= max_frame_time;
 
             if should_redraw || tick {
-                dbg!();
                 if tick {
                     last_tick = now;
                 }
@@ -344,7 +336,6 @@ impl WoL {
 
                 // Unbind so that we can render to the screen now
                 gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
-                dbg!(gl::GetError()); // <3
             }
         }
 
@@ -358,7 +349,6 @@ impl WoL {
             gl::DrawArrays(gl::TRIANGLE_STRIP, 0, 4);
 
             gl::UseProgram(0);
-            dbg!(gl::GetError()); // <3
         }
 
         self.window.swap_buffers();

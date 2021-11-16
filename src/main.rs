@@ -20,15 +20,47 @@ use x11rb::wrapper::ConnectionExt;
 use std::ptr::null;
 
 fn main() {
-    // BasicGoL::new(1000, 1000).bench(1000);
-    // let mut gol = BasicGoL::new(5, 5);
-    // gol.fill_with_gliders();
-    // gol.print("  ", "██");
-    // gol.tick();
-    // gol.print("  ", "██");
+    let scale = 8;
+    let period = 1.0 / 30.0;
+    // let rule = "B34/S012345678";
+    let rule = "B3/S23";
+    let live_color = (0, 255, 0);
+    let dead_color = (255, 0, 0);
 
-    let mut wol = WoL::new(4, 1.0 / 30.0);
+    let (born, survive) = parse_rule_to_cond(rule).unwrap();
+
+    let mut wol = WoL::new(scale, period, &born, &survive, live_color, dead_color);
     wol.main_loop();
+}
+
+fn parse_rule_to_cond(rule: &str) -> Option<(String, String)> {
+    let b_index = rule.find('B')?;
+    let div_s_index = rule.find("/S")?;
+
+    let born_cond = digits_to_cond(&rule[b_index + 1..div_s_index])?;
+    let survive_cond = digits_to_cond(&rule[div_s_index + 2..])?;
+
+    Some((born_cond, survive_cond))
+}
+
+fn digits_to_cond(digits: &str) -> Option<String> {
+    if digits.is_empty() {
+        Some("false".into())
+    } else {
+        Some(
+            digits
+                .chars()
+                .map(|n| {
+                    if '0' <= n && n <= '8' {
+                        Some(format!("sum == {}", n))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Option<Vec<String>>>()?
+                .join(" || "),
+        )
+    }
 }
 
 struct WoL {
@@ -57,7 +89,14 @@ struct WoL {
 }
 
 impl WoL {
-    fn new(scale: u32, delay: f64) -> WoL {
+    fn new(
+        scale: u32,
+        period: f64,
+        born_cond: &str,
+        survive_cond: &str,
+        live_color: (u8, u8, u8),
+        dead_color: (u8, u8, u8),
+    ) -> WoL {
         let mut my_glfw = glfw::init(glfw::FAIL_ON_ERRORS.clone()).unwrap();
 
         let (width, height) = my_glfw.with_primary_monitor(|_g, mon| {
@@ -109,8 +148,46 @@ impl WoL {
             gl::ClearColor(0.3, 0.3, 0.5, 1.0);
         }
 
+        let gol_shader_source = format!(
+            "\
+#version 330 core
+out vec4 outColor;
+
+uniform sampler2D state;
+uniform vec2 scale;
+
+int get(vec2 offset) {{
+    return int(texture2D(state, (gl_FragCoord.xy + offset) / scale).r);
+}}
+
+void main() {{
+    int sum =
+        get(vec2(-1.0, -1.0)) +
+        get(vec2(-1.0,  0.0)) +
+        get(vec2(-1.0,  1.0)) +
+        get(vec2( 0.0, -1.0)) +
+        get(vec2( 0.0,  1.0)) +
+        get(vec2( 1.0, -1.0)) +
+        get(vec2( 1.0,  0.0)) +
+        get(vec2( 1.0,  1.0));
+
+    int current = get(vec2(0.0, 0.0));
+
+    float val = 0.0;
+
+    if (current == 0) {{
+        if ({}) {{ val = 1.0; }}
+    }} else {{
+        if ({}) {{ val = 1.0; }}
+    }}
+
+    gl_FragColor = vec4(val, val, val, 1.0);
+}}\
+        ",
+            born_cond, survive_cond
+        );
         let quad_vertex = CString::new(include_str!("../glsl/quad.vert")).unwrap();
-        let gol_frag_shader = CString::new(include_str!("../glsl/gol.frag")).unwrap();
+        let gol_frag_shader = CString::new(gol_shader_source).unwrap();
         let copy_frag_shader = CString::new(include_str!("../glsl/copy.frag")).unwrap();
 
         let gol_shader = program_from_sources(&quad_vertex, &gol_frag_shader).unwrap();
@@ -203,7 +280,7 @@ impl WoL {
             width,
             height,
             scale,
-            delay,
+            delay: period,
             window,
             events,
 
@@ -282,7 +359,7 @@ impl WoL {
                                     self.width / self.scale * self.height / self.scale;
                                 let pixels = (0..total_pixels)
                                     .map(|_| {
-                                        if rand::random::<f32>() > 0.7 {
+                                        if rand::random::<f32>() > 0.5 {
                                             0xFFFFFFFF
                                         } else {
                                             0x00000000
@@ -609,8 +686,9 @@ unsafe fn make_window_wallpaper(raw_xcb_conn: *mut c_void, window: u32, width: u
     let xcb = x11rb::xcb_ffi::XCBConnection::from_raw_xcb_connection(raw_xcb_conn as _, false)
         .expect("Couldn't make XCBConnection from raw xcb connection");
 
-    xcb.unmap_window(window).unwrap();
+    xcb.sync().unwrap();
 
+    xcb.unmap_window(window).unwrap();
     xcb.sync().unwrap();
 
     // This makes it work

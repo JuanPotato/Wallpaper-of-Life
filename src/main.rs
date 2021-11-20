@@ -1,7 +1,10 @@
 extern crate gl;
 extern crate glfw;
+extern crate gumdrop;
 extern crate x11_dl;
 extern crate x11rb;
+
+use gumdrop::Options;
 
 use glfw::{
     Action, Context, Key, Modifiers, MouseButton, OpenGlProfileHint, Window, WindowEvent,
@@ -18,18 +21,107 @@ use x11rb::protocol::xproto::{
 use x11rb::wrapper::ConnectionExt;
 
 use std::ptr::null;
+use std::str::FromStr;
+
+#[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
+struct Color(u8, u8, u8);
+
+impl FromStr for Color {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value.len() != 7 || !value.starts_with('#') {
+            Err("Color must be in format #RRGGBB")
+        } else {
+            let c = u32::from_str_radix(&value[1..7], 16).map_err(|_| "Couldn't parse color")?;
+            Ok(Color(
+                ((c >> 16) as u8 & 0xFF),
+                ((c >> 8) as u8 & 0xFF),
+                (c as u8 & 0xFF),
+            ))
+        }
+    }
+}
+
+impl Color {
+    fn r(&self) -> f32 {
+        self.0 as f32 / 255.0
+    }
+
+    fn g(&self) -> f32 {
+        self.1 as f32 / 255.0
+    }
+
+    fn b(&self) -> f32 {
+        self.2 as f32 / 255.0
+    }
+}
+
+// Define options for the program.
+#[derive(Debug, Options)]
+struct WolOptions {
+    #[options(help = "print help message")]
+    help: bool,
+
+    #[options(help = "Simulation cell size in pixels", default = "4", no_short)]
+    pixels: u32,
+
+    #[options(
+        help = "Simulation speed, supports fractional values",
+        default = "30",
+        no_short
+    )]
+    fps: f64,
+
+    #[options(help = "Rule for any life-like automata", default = "B3/S23", no_short)]
+    rule: String,
+
+    #[options(help = "Wallpaper width in pixels, defaults to screen width", no_short)]
+    width: Option<u32>,
+
+    #[options(
+        help = "Wallpaper height in pixels, defaults to screen height",
+        no_short
+    )]
+    height: Option<u32>,
+
+    #[options(
+        help = "Color of live cells",
+        default = "#FFFFFF",
+        parse(try_from_str),
+        no_short
+    )]
+    live: Color,
+
+    #[options(
+        help = "Color of dead cells",
+        default = "#000000",
+        parse(try_from_str),
+        no_short
+    )]
+    dead: Color,
+}
 
 fn main() {
-    let scale = 8;
-    let period = 1.0 / 30.0;
+    let opts: WolOptions = WolOptions::parse_args_default_or_exit();
+
+    println!("{:#?}", opts);
+    // return;
+    // let rule = "B45678/S01234";
+    // let rule = "B34/S234567";
     // let rule = "B34/S012345678";
-    let rule = "B3/S23";
-    let live_color = (0, 255, 0);
-    let dead_color = (255, 0, 0);
+    // let rule = "B3/S23";
 
-    let (born, survive) = parse_rule_to_cond(rule).unwrap();
+    let (born, survive) = parse_rule_to_cond(&opts.rule).unwrap();
 
-    let mut wol = WoL::new(scale, period, &born, &survive, live_color, dead_color);
+    let mut wol = WoL::new(
+        opts.pixels,
+        1.0 / opts.fps,
+        &born,
+        &survive,
+        opts.live,
+        opts.dead,
+    );
     wol.main_loop();
 }
 
@@ -94,8 +186,8 @@ impl WoL {
         period: f64,
         born_cond: &str,
         survive_cond: &str,
-        live_color: (u8, u8, u8),
-        dead_color: (u8, u8, u8),
+        live_color: Color,
+        dead_color: Color,
     ) -> WoL {
         let mut my_glfw = glfw::init(glfw::FAIL_ON_ERRORS.clone()).unwrap();
 
@@ -186,9 +278,34 @@ void main() {{
         ",
             born_cond, survive_cond
         );
+
+        let copy_source = format!(
+            "\
+#version 330 core
+
+uniform sampler2D state;
+uniform vec2 scale;
+
+void main() {{
+    if (texture2D(state, gl_FragCoord.xy / scale).r == 1.0) {{
+        gl_FragColor = vec4({}, {}, {}, {}); // Live
+    }} else {{
+        gl_FragColor = vec4({}, {}, {}, {}); // Dead
+    }}
+}}\
+        ",
+            live_color.r(),
+            live_color.g(),
+            live_color.b(),
+            1.0,
+            dead_color.r(),
+            dead_color.g(),
+            dead_color.b(),
+            1.0
+        );
         let quad_vertex = CString::new(include_str!("../glsl/quad.vert")).unwrap();
         let gol_frag_shader = CString::new(gol_shader_source).unwrap();
-        let copy_frag_shader = CString::new(include_str!("../glsl/copy.frag")).unwrap();
+        let copy_frag_shader = CString::new(copy_source).unwrap();
 
         let gol_shader = program_from_sources(&quad_vertex, &gol_frag_shader).unwrap();
         let gol_uni_state = get_uniform_location(gol_shader, "state");

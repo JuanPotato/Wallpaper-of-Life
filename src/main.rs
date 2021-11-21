@@ -24,17 +24,22 @@ use std::ptr::null;
 use std::str::FromStr;
 
 #[derive(Debug, Clone, Copy, Ord, PartialOrd, Eq, PartialEq)]
-struct Color(u8, u8, u8);
+struct Color(u8, u8, u8, u8);
 
 impl FromStr for Color {
     type Err = &'static str;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        if value.len() != 7 || !value.starts_with('#') {
-            Err("Color must be in format #RRGGBB")
+        if (value.len() != 7 && value.len() != 9) || !value.starts_with('#') {
+            Err("Color must be in format #RRGGBB or #RRGGBBAA")
         } else {
-            let c = u32::from_str_radix(&value[1..7], 16).map_err(|_| "Couldn't parse color")?;
+            let mut c = u32::from_str_radix(&value[1..], 16).map_err(|_| "Couldn't parse color")?;
+            if value.len() == 7 {
+                c = c << 8 | 0xFF;
+            }
+
             Ok(Color(
+                ((c >> 24) as u8 & 0xFF),
                 ((c >> 16) as u8 & 0xFF),
                 ((c >> 8) as u8 & 0xFF),
                 (c as u8 & 0xFF),
@@ -54,6 +59,10 @@ impl Color {
 
     fn b(&self) -> f32 {
         self.2 as f32 / 255.0
+    }
+
+    fn a(&self) -> f32 {
+        self.3 as f32 / 255.0
     }
 }
 
@@ -199,6 +208,7 @@ impl WoL {
         my_glfw.window_hint(WindowHint::ContextVersionMajor(3));
         my_glfw.window_hint(WindowHint::ContextVersionMinor(3));
         my_glfw.window_hint(WindowHint::OpenGlProfile(OpenGlProfileHint::Core));
+        my_glfw.window_hint(WindowHint::TransparentFramebuffer(true));
 
         // Create a windowed mode window and its OpenGL context
         let (mut window, events) = my_glfw
@@ -297,12 +307,13 @@ void main() {{
             live_color.r(),
             live_color.g(),
             live_color.b(),
-            1.0,
+            live_color.a(),
             dead_color.r(),
             dead_color.g(),
             dead_color.b(),
-            1.0
+            dead_color.a(),
         );
+
         let quad_vertex = CString::new(include_str!("../glsl/quad.vert")).unwrap();
         let gol_frag_shader = CString::new(gol_shader_source).unwrap();
         let copy_frag_shader = CString::new(copy_source).unwrap();
